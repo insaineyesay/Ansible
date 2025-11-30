@@ -1,0 +1,114 @@
+- name: Install Mac-Mini Software
+  hosts: all
+  gather_facts: no
+  environment:
+  PATH: /Users/x/y/z
+  vars:
+    brew_packages:
+      - ansible
+      - autoconf
+      - awscli
+      - boost
+      - brotli
+      - bundletool
+    brew_versions:
+      - 5.3.0
+      - 2.71
+      - 2.4.23
+      - 1.78.0
+      - 1.0.9
+      - 1.8.2
+    install_homebrew_if_missing: false
+    brew_command: brew
+    # python_modules:
+    #   - configparser
+    #   - pylint
+    #   - virtualenv
+    upgrade_homebrew_packages: false
+    tapped_pods: false
+
+  pre_tasks:
+    - name: Ensuring Homebrew Is Installed
+      stat:
+        path: /usr/local/bin/brew
+      register: homebrew_check
+
+    - name: Installing Homebrew
+      shell: /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+      when:
+        - not homebrew_check.stat.exists
+        - install_homebrew_if_missing
+
+    - name: Ensuring Taps Don't Exist 
+      stat:
+        path: /usr/local/Homebrew/Library/Taps/local/homebrew-{{ item }}
+      register: tap_check
+      with_items: "{{ brew_packages }}"
+ 
+    - name: Ensuring Extracts Don't Exist
+      stat:
+        path: /usr/local/Homebrew/Library/Taps/local/homebrew-{{ item.0 }}/Formula/{{ item.0 }}@{{ item.1 }}.rb
+      register: extract_check
+      loop: "{{ brew_packages | zip(brew_versions) | list }}"
+      loop_control:
+        index_var: my_idx
+      
+    - name: determine Processor
+      ansible.builtin.command: uname -p
+      register: processor
+   
+    - name: set Brew Version
+      set_fact:
+        brew_command: arch -x86_64 brew
+      when: "'arm' in processor.stdout"
+
+    - name: Determine if app Is installed
+      ansible.builtin.command: "{{ brew_command }} list {{ item.0 }}@{{ item.1 }}"
+      register: app_installed
+      when: 
+        - homebrew_check.stat.exists
+      loop: "{{ brew_packages | zip(brew_versions) | list  }}"
+      failed_when: not app_installed.failed 
+      ignore_errors: true
+  tasks:
+      - name: Create local Spaces
+        ansible.builtin.command: "{{ brew_command }} tap-new local/{{ item }}"
+        when: 
+          - homebrew_check.stat.exists
+          - not tap_check.results.{{ my_idx }}.stat.exists
+        loop: "{{ brew_packages }}"
+        loop_control:
+          index_var: my_idx
+          
+      - name: Changed tapped value
+        set_fact:
+          tapped_pods: true
+        when:
+          - homebrew_check.stat.exists
+          - not tap_check.results.{{ my_idx }}.stat.exists
+        loop: "{{ brew_packages }}"
+        loop_control:
+          index_var: my_idx
+
+      - name: Extract App Version
+        ansible.builtin.command: "{{ brew_command }} extract --version={{ item.1 }} {{ item.0 }} local/{{ item.0 }}"
+        when: 
+          - homebrew_check.stat.exists
+          - not extract_check.results.{{ my_idx }}.stat.exists or {{ tapped_pods }}
+        loop: "{{ brew_packages | zip(brew_versions) | list }}"
+        loop_control:
+          index_var: my_idx
+      - name: unlink existing program
+        ansible.builtin.command: "{{ brew_command }} unlink {{ item.0 }}@{{ item.1 }}"
+        when: 
+         - homebrew_check.stat.exists
+         - app_installed.results.{{ my_idx }}.stdout is not search("No such Keg") or app_installed.failed
+        loop: "{{ brew_packages | zip(brew_versions) | list }}"
+        loop_control:
+          index_var: my_idx
+
+      - name: install local brew
+        ansible.builtin.command: "{{ brew_command }} install local/{{ item.0 }}/{{ item.0 }}@{{ item.1 }}"
+        when: 
+          - homebrew_check.stat.exists
+        loop: "{{ brew_packages | zip(brew_versions) | list }}"
